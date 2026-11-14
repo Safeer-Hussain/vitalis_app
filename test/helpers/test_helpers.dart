@@ -1,0 +1,285 @@
+import 'dart:async';
+
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vitalis_app/core/di/injection_container.dart';
+import 'package:vitalis_app/data/models/ai_triage_model.dart';
+import 'package:vitalis_app/data/models/biomarker_model.dart';
+import 'package:vitalis_app/data/models/lab_report_model.dart';
+import 'package:vitalis_app/data/models/medical_device_model.dart';
+import 'package:vitalis_app/data/models/prescription_model.dart';
+import 'package:vitalis_app/data/models/telehealth_appointment_model.dart';
+import 'package:vitalis_app/data/models/telehealth_doctor_model.dart';
+import 'package:vitalis_app/data/models/vital_reading_model.dart';
+import 'package:vitalis_app/domain/repositories/ai_triage_repository.dart';
+import 'package:vitalis_app/domain/repositories/lab_repository.dart';
+import 'package:vitalis_app/domain/repositories/prescription_repository.dart';
+import 'package:vitalis_app/domain/repositories/telehealth_repository.dart';
+import 'package:vitalis_app/domain/repositories/vitals_repository.dart';
+
+class FakeVitalsRepository implements VitalsRepository {
+  final List<VitalReadingModel> vitals = [];
+  final StreamController<VitalReadingModel> _controller =
+      StreamController<VitalReadingModel>.broadcast();
+
+  @override
+  Future<List<VitalReadingModel>> getHistoricalVitals({int limit = 30}) async {
+    return List.from(vitals.take(limit));
+  }
+
+  @override
+  Future<void> saveVitalReading(VitalReadingModel reading) async {
+    vitals.insert(0, reading);
+  }
+
+  @override
+  Future<List<MedicalDeviceModel>> scanDevices() async {
+    return [
+      const MedicalDeviceModel(
+        id: 'DEV-CC-9041',
+        name: 'CardioCuff Pro',
+        model: 'CC-PRO-V2',
+        type: 'CARDIO_CUFF',
+        batteryLevel: 88,
+        rssi: -54,
+        connected: true,
+      ),
+      const MedicalDeviceModel(
+        id: 'DEV-GS-2018',
+        name: 'GlucoSense CGM',
+        model: 'GS-CGM-4X',
+        type: 'GLUCO_SENSE',
+        batteryLevel: 94,
+        rssi: -48,
+        connected: false,
+      ),
+    ];
+  }
+
+  @override
+  Future<bool> pairDevice(String sensorType) async => true;
+
+  @override
+  Future<bool> disconnectDevice() async => true;
+
+  @override
+  Future<Map<String, dynamic>> calibrateDevice(String sensorType) async {
+    return {
+      'status': 'CALIBRATED',
+      'sensorType': sensorType,
+      'zeroOffset': 0.12,
+    };
+  }
+
+  @override
+  Stream<VitalReadingModel> get liveTelemetryStream => _controller.stream;
+
+  void emitTelemetry(VitalReadingModel reading) {
+    _controller.add(reading);
+  }
+}
+
+class FakeTelehealthRepository implements TelehealthRepository {
+  final List<TelehealthDoctorModel> doctors = [
+    const TelehealthDoctorModel(
+      id: 'doc_01',
+      name: 'Dr. Sarah Chen, MD, FACC',
+      specialty: 'Cardiology',
+      rating: 4.96,
+      reviewCount: 342,
+      consultationFee: 180.0,
+      availableToday: true,
+      avatarPath: 'assets/images/doctors/dr_sarah_chen.png',
+      bio: 'Board-certified cardiologist',
+      experienceYears: 14,
+    ),
+  ];
+
+  final List<TelehealthAppointmentModel> appointments = [];
+
+  @override
+  Future<List<TelehealthDoctorModel>> getDoctors() async => List.from(doctors);
+
+  @override
+  Future<List<TelehealthAppointmentModel>> getAppointments() async =>
+      List.from(appointments);
+
+  @override
+  Future<void> bookAppointment(TelehealthAppointmentModel appointment) async {
+    appointments.add(appointment);
+  }
+
+  @override
+  Future<void> cancelAppointment(String appointmentId) async {
+    final idx = appointments.indexWhere((a) => a.id == appointmentId);
+    if (idx != -1) {
+      appointments[idx] = appointments[idx].copyWith(status: 'CANCELLED');
+    }
+  }
+
+  @override
+  Future<void> updateAppointment(TelehealthAppointmentModel appointment) async {
+    final idx = appointments.indexWhere((a) => a.id == appointment.id);
+    if (idx != -1) {
+      appointments[idx] = appointment;
+    }
+  }
+}
+
+class FakeLabRepository implements LabRepository {
+  final List<LabReportModel> reports = [
+    LabReportModel(
+      id: 'lab_cbc_01',
+      title: 'Complete Blood Count (CBC)',
+      panelCode: 'CBC-DIFF-W8',
+      category: 'Hematology',
+      collectionDate: DateTime.now(),
+      orderingPhysician: 'Dr. Elena Rostova',
+      status: 'FINAL',
+      isBookmarked: false,
+      clinicalNotes: 'Normal range',
+      biomarkers: const [
+        BiomarkerModel(
+          id: 'bm_01',
+          reportId: 'lab_cbc_01',
+          name: 'White Blood Cells',
+          code: 'WBC',
+          value: 6.8,
+          unit: 'x10^3/uL',
+          minRange: 4.5,
+          maxRange: 11.0,
+          clinicalStatus: 'OPTIMAL',
+        ),
+      ],
+    ),
+  ];
+
+  @override
+  Future<List<LabReportModel>> getLabReports() async => List.from(reports);
+
+  @override
+  Future<void> toggleBookmark(String reportId, bool isBookmarked) async {
+    final idx = reports.indexWhere((r) => r.id == reportId);
+    if (idx != -1) {
+      reports[idx] = reports[idx].copyWith(isBookmarked: isBookmarked);
+    }
+  }
+
+  @override
+  Future<void> saveLabReport(LabReportModel report) async {
+    reports.add(report);
+  }
+}
+
+class FakePrescriptionRepository implements PrescriptionRepository {
+  final List<PrescriptionModel> prescriptions = [
+    const PrescriptionModel(
+      id: 'rx_01',
+      medicationName: 'Lisinopril',
+      dosage: '10 mg Oral Tablet',
+      instructions: 'Take 1 tablet every morning',
+      frequency: 'Morning',
+      pillsRemaining: 24,
+      totalPills: 30,
+      dosesTakenToday: 0,
+      dailyTargetDoses: 1,
+      prescribingDoctor: 'Dr. Sarah Chen, MD',
+      refillStatus: 'NORMAL',
+    ),
+  ];
+
+  @override
+  Future<List<PrescriptionModel>> getPrescriptions() async =>
+      List.from(prescriptions);
+
+  @override
+  Future<void> savePrescription(PrescriptionModel prescription) async {
+    prescriptions.add(prescription);
+  }
+
+  @override
+  Future<void> recordDoseTaken(String prescriptionId) async {
+    final idx = prescriptions.indexWhere((p) => p.id == prescriptionId);
+    if (idx != -1) {
+      final cur = prescriptions[idx];
+      prescriptions[idx] = cur.copyWith(
+        dosesTakenToday: cur.dosesTakenToday + 1,
+        pillsRemaining: (cur.pillsRemaining - 1).clamp(0, 999),
+      );
+    }
+  }
+
+  @override
+  Future<void> requestRefill(String prescriptionId) async {
+    final idx = prescriptions.indexWhere((p) => p.id == prescriptionId);
+    if (idx != -1) {
+      prescriptions[idx] = prescriptions[idx].copyWith(
+        refillStatus: 'REFILL_REQUESTED',
+      );
+    }
+  }
+}
+
+class FakeAiTriageRepository implements AiTriageRepository {
+  final List<AiTriageMessageModel> history = [];
+
+  @override
+  Future<List<AiTriageMessageModel>> getChatHistory() async =>
+      List.from(history);
+
+  @override
+  Future<void> saveMessage(AiTriageMessageModel message) async {
+    history.add(message);
+  }
+
+  @override
+  Future<void> clearHistory() async {
+    history.clear();
+  }
+
+  @override
+  Stream<String> generateClinicalTriageResponse({
+    required String userPrompt,
+    required List<VitalReadingModel> recentVitals,
+    required List<LabReportModel> labReports,
+    required List<PrescriptionModel> prescriptions,
+  }) async* {
+    yield 'Clinical ';
+    yield 'triage ';
+    yield 'assessment.';
+  }
+}
+
+void registerTestDependencies({
+  FakeVitalsRepository? vitals,
+  FakeTelehealthRepository? telehealth,
+  FakeLabRepository? labs,
+  FakePrescriptionRepository? prescriptions,
+  FakeAiTriageRepository? triage,
+}) {
+  SharedPreferences.setMockInitialValues({});
+  if (sl.isRegistered<VitalsRepository>()) {
+    sl.unregister<VitalsRepository>();
+  }
+  if (sl.isRegistered<TelehealthRepository>()) {
+    sl.unregister<TelehealthRepository>();
+  }
+  if (sl.isRegistered<LabRepository>()) {
+    sl.unregister<LabRepository>();
+  }
+  if (sl.isRegistered<PrescriptionRepository>()) {
+    sl.unregister<PrescriptionRepository>();
+  }
+  if (sl.isRegistered<AiTriageRepository>()) {
+    sl.unregister<AiTriageRepository>();
+  }
+
+  sl.registerSingleton<VitalsRepository>(vitals ?? FakeVitalsRepository());
+  sl.registerSingleton<TelehealthRepository>(
+    telehealth ?? FakeTelehealthRepository(),
+  );
+  sl.registerSingleton<LabRepository>(labs ?? FakeLabRepository());
+  sl.registerSingleton<PrescriptionRepository>(
+    prescriptions ?? FakePrescriptionRepository(),
+  );
+  sl.registerSingleton<AiTriageRepository>(triage ?? FakeAiTriageRepository());
+}
