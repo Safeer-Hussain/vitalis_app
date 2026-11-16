@@ -1,5 +1,9 @@
 package com.safeer.vitalis
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
@@ -13,57 +17,56 @@ class MainActivity : FlutterActivity() {
     private val METHOD_CHANNEL = "com.safeer.vitalis/medical_devices"
     private val EVENT_CHANNEL = "com.safeer.vitalis/clinical_telemetry"
 
+    // Standard Bluetooth SIG Clinical Service UUIDs
+    private val UUID_HEART_RATE = "0x180D"
+    private val UUID_BLOOD_PRESSURE = "0x1810"
+    private val UUID_GLUCOSE = "0x1808"
+
     private var selectedSensorType = "CARDIO_CUFF"
     private var isPaired = true
     private var telemetryHandler: Handler? = null
     private var telemetryRunnable: Runnable? = null
     private var eventSink: EventChannel.EventSink? = null
 
+    // Sprint 23 BLE GATT Direct Peripheral & Reconnect state
+    private var autoReconnectEnabled = true
+    private var backgroundTelemetryEnabled = false
+    private var connectionStatus = "CONNECTED"
+    private var reconnectAttempt = 0
+    private val maxReconnectAttempts = 5
+    private var currentBackoffMs = 1000L
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        createNotificationChannelIfNeeded()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanClinicalSensors" -> {
-                    val devices = listOf(
-                        mapOf(
-                            "id" to "DEV-CC-9041",
-                            "name" to "CardioCuff Pro",
-                            "model" to "CC-PRO-V2",
-                            "type" to "CARDIO_CUFF",
-                            "batteryLevel" to 88,
-                            "rssi" to -54,
-                            "connected" to (selectedSensorType == "CARDIO_CUFF" && isPaired)
-                        ),
-                        mapOf(
-                            "id" to "DEV-GS-2018",
-                            "name" to "GlucoSense CGM",
-                            "model" to "GS-CGM-4X",
-                            "type" to "GLUCO_SENSE",
-                            "batteryLevel" to 94,
-                            "rssi" to -48,
-                            "connected" to (selectedSensorType == "GLUCO_SENSE" && isPaired)
-                        ),
-                        mapOf(
-                            "id" to "DEV-OP-5523",
-                            "name" to "OxyPulse Clinical",
-                            "model" to "OP-CLIN-9",
-                            "type" to "OXY_PULSE",
-                            "batteryLevel" to 76,
-                            "rssi" to -62,
-                            "connected" to (selectedSensorType == "OXY_PULSE" && isPaired)
-                        )
-                    )
+                    val devices = getDiscoveredSensors()
                     result.success(devices)
+                }
+                "scanGattPeripherals" -> {
+                    val requestedUuids = call.argument<List<String>>("serviceUuids") 
+                        ?: listOf(UUID_HEART_RATE, UUID_BLOOD_PRESSURE, UUID_GLUCOSE)
+                    val gattPeripherals = getGattPeripherals(requestedUuids)
+                    result.success(gattPeripherals)
                 }
                 "pairMedicalDevice" -> {
                     val sensorType = call.argument<String>("sensorType") ?: "CARDIO_CUFF"
                     selectedSensorType = sensorType
                     isPaired = true
+                    connectionStatus = "CONNECTED"
+                    reconnectAttempt = 0
+                    currentBackoffMs = 1000L
                     result.success(true)
                 }
                 "disconnectDevice" -> {
                     isPaired = false
+                    connectionStatus = "DISCONNECTED"
+                    reconnectHandler.removeCallbacksAndMessages(null)
                     result.success(true)
                 }
                 "triggerCalibration" -> {
@@ -76,6 +79,33 @@ class MainActivity : FlutterActivity() {
                         "timestamp" to System.currentTimeMillis()
                     )
                     result.success(response)
+                }
+                "enableAutoReconnect" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: true
+                    autoReconnectEnabled = enabled
+                    result.success(true)
+                }
+                "toggleBackgroundTelemetry" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    backgroundTelemetryEnabled = enabled
+                    result.success(true)
+                }
+                "getConnectionState" -> {
+                    val state = mapOf(
+                        "connectionStatus" to connectionStatus,
+                        "autoReconnectEnabled" to autoReconnectEnabled,
+                        "backgroundTelemetryEnabled" to backgroundTelemetryEnabled,
+                        "reconnectAttempt" to reconnectAttempt,
+                        "maxReconnectAttempts" to maxReconnectAttempts,
+                        "currentBackoffMs" to currentBackoffMs
+                    )
+                    result.success(state)
+                }
+                "simulateConnectionDrop" -> {
+                    if (isPaired && autoReconnectEnabled) {
+                        handleSimulatedConnectionDrop()
+                    }
+                    result.success(true)
                 }
                 else -> {
                     result.notImplemented()
@@ -98,12 +128,134 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun getDiscoveredSensors(): List<Map<String, Any>> {
+        return listOf(
+            mapOf(
+                "id" to "DEV-CC-9041",
+                "name" to "CardioCuff Pro",
+                "model" to "CC-PRO-V2",
+                "type" to "CARDIO_CUFF",
+                "batteryLevel" to 88,
+                "rssi" to -54,
+                "connected" to (selectedSensorType == "CARDIO_CUFF" && isPaired)
+            ),
+            mapOf(
+                "id" to "DEV-GS-2018",
+                "name" to "GlucoSense CGM",
+                "model" to "GS-CGM-4X",
+                "type" to "GLUCO_SENSE",
+                "batteryLevel" to 94,
+                "rssi" to -48,
+                "connected" to (selectedSensorType == "GLUCO_SENSE" && isPaired)
+            ),
+            mapOf(
+                "id" to "DEV-OP-5523",
+                "name" to "OxyPulse Clinical",
+                "model" to "OP-CLIN-9",
+                "type" to "OXY_PULSE",
+                "batteryLevel" to 76,
+                "rssi" to -62,
+                "connected" to (selectedSensorType == "OXY_PULSE" && isPaired)
+            )
+        )
+    }
+
+    private fun getGattPeripherals(filterUuids: List<String>): List<Map<String, Any>> {
+        val allGattDevices = listOf(
+            mapOf(
+                "id" to "GATT-CC-8821",
+                "name" to "CardioCuff Pro BLE-GATT",
+                "model" to "CC-PRO-GATT-V3",
+                "type" to "CARDIO_CUFF",
+                "macAddress" to "C4:D3:58:AA:11:42",
+                "batteryLevel" to 92,
+                "rssi" to -52,
+                "serviceUuids" to listOf(UUID_BLOOD_PRESSURE, UUID_HEART_RATE),
+                "isGattDevice" to true,
+                "connectionStatus" to (if (selectedSensorType == "CARDIO_CUFF" && isPaired) connectionStatus else "DISCONNECTED")
+            ),
+            mapOf(
+                "id" to "GATT-GS-4190",
+                "name" to "GlucoSense CGM Direct",
+                "model" to "GS-CGM-DIRECT-X",
+                "type" to "GLUCO_SENSE",
+                "macAddress" to "E1:8B:22:90:3F:8A",
+                "batteryLevel" to 96,
+                "rssi" to -46,
+                "serviceUuids" to listOf(UUID_GLUCOSE),
+                "isGattDevice" to true,
+                "connectionStatus" to (if (selectedSensorType == "GLUCO_SENSE" && isPaired) connectionStatus else "DISCONNECTED")
+            ),
+            mapOf(
+                "id" to "GATT-OP-7734",
+                "name" to "OxyPulse Clinical Wireless",
+                "model" to "OP-CLIN-GATT-2",
+                "type" to "OXY_PULSE",
+                "macAddress" to "F0:24:6D:77:C8:19",
+                "batteryLevel" to 81,
+                "rssi" to -59,
+                "serviceUuids" to listOf(UUID_HEART_RATE),
+                "isGattDevice" to true,
+                "connectionStatus" to (if (selectedSensorType == "OXY_PULSE" && isPaired) connectionStatus else "DISCONNECTED")
+            )
+        )
+
+        val normalizedFilters = filterUuids.map { it.uppercase() }
+        return allGattDevices.filter { device ->
+            val services = (device["serviceUuids"] as? List<*>)?.map { it.toString().uppercase() } ?: emptyList()
+            services.any { s -> normalizedFilters.contains(s) }
+        }
+    }
+
+    private fun handleSimulatedConnectionDrop() {
+        connectionStatus = "RECONNECTING"
+        reconnectAttempt = 1
+        currentBackoffMs = 1000L
+        scheduleReconnectAttempt()
+    }
+
+    private fun scheduleReconnectAttempt() {
+        if (!autoReconnectEnabled || reconnectAttempt > maxReconnectAttempts) {
+            connectionStatus = "DISCONNECTED"
+            return
+        }
+
+        reconnectHandler.postDelayed({
+            if (reconnectAttempt >= 3) {
+                // Recovered connection after backoff iterations
+                connectionStatus = "CONNECTED"
+                reconnectAttempt = 0
+                currentBackoffMs = 1000L
+            } else {
+                reconnectAttempt++
+                currentBackoffMs = (currentBackoffMs * 2L).coerceAtMost(16000L)
+                scheduleReconnectAttempt()
+            }
+        }, currentBackoffMs)
+    }
+
+    private fun createNotificationChannelIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channelId = "vitalis_clinical_telemetry"
+            val channelName = "Vitalis Clinical Telemetry Channel"
+            val channel = NotificationChannel(
+                channelId,
+                channelName,
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Ongoing telemetry bridge connection for vital signs monitoring"
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
     private fun startTelemetryStream() {
         stopTelemetryStream()
         telemetryHandler = Handler(Looper.getMainLooper())
         telemetryRunnable = object : Runnable {
             override fun run() {
-                if (isPaired && eventSink != null) {
+                if (isPaired && connectionStatus == "CONNECTED" && eventSink != null) {
                     val packet = generateClinicalPacket(selectedSensorType)
                     eventSink?.success(packet)
                 }
@@ -141,7 +293,9 @@ class MainActivity : FlutterActivity() {
                     "pulseRate" to pulse,
                     "irregularHeartbeat" to irregular,
                     "batteryLevel" to 87,
-                    "signalQuality" to "OPTIMAL"
+                    "signalQuality" to "OPTIMAL",
+                    "connectionStatus" to connectionStatus,
+                    "autoReconnectActive" to autoReconnectEnabled
                 )
             }
             "GLUCO_SENSE" -> {
@@ -163,7 +317,9 @@ class MainActivity : FlutterActivity() {
                     "trendArrow" to trend,
                     "timeInRangePercentage" to Math.round(tir * 10.0) / 10.0,
                     "sensorLifetimeDaysLeft" to 11,
-                    "signalQuality" to "EXCELLENT"
+                    "signalQuality" to "EXCELLENT",
+                    "connectionStatus" to connectionStatus,
+                    "autoReconnectActive" to autoReconnectEnabled
                 )
             }
             "OXY_PULSE" -> {
@@ -186,7 +342,9 @@ class MainActivity : FlutterActivity() {
                     "temperatureCelsius" to Math.round(tempC * 10.0) / 10.0,
                     "temperatureFahrenheit" to Math.round(tempF * 10.0) / 10.0,
                     "crc32Checksum" to checksum,
-                    "signalQuality" to "NOMINAL"
+                    "signalQuality" to "NOMINAL",
+                    "connectionStatus" to connectionStatus,
+                    "autoReconnectActive" to autoReconnectEnabled
                 )
             }
             else -> mapOf("timestamp" to now, "sensorType" to "UNKNOWN")

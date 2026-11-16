@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/di/injection_container.dart';
+import '../../core/platform/native_sensor_bridge.dart';
 import '../../data/models/medical_device_model.dart';
 import '../../data/models/vital_reading_model.dart';
 import '../../domain/repositories/vitals_repository.dart';
@@ -11,39 +12,77 @@ import '../../domain/repositories/vitals_repository.dart';
 class VitalsState {
   final bool isLoading;
   final List<MedicalDeviceModel> devices;
+  final List<MedicalDeviceModel> gattPeripherals;
+  final bool isScanningGatt;
+  final List<String> activeGattUuidFilters;
   final String selectedSensorType; // 'CARDIO_CUFF', 'GLUCO_SENSE', 'OXY_PULSE'
   final VitalReadingModel? currentTelemetry;
   final List<VitalReadingModel> historicalVitals;
   final bool simulatedAbnormalInjected;
+  final bool autoReconnectEnabled;
+  final bool backgroundTelemetryEnabled;
+  final String connectionStatus; // 'CONNECTED', 'RECONNECTING', 'DISCONNECTED'
+  final int reconnectAttempts;
+  final int currentBackoffMs;
   final String? errorMessage;
 
   const VitalsState({
     this.isLoading = false,
     this.devices = const [],
+    this.gattPeripherals = const [],
+    this.isScanningGatt = false,
+    this.activeGattUuidFilters = const [
+      NativeSensorBridge.uuidHeartRate,
+      NativeSensorBridge.uuidBloodPressure,
+      NativeSensorBridge.uuidGlucose,
+    ],
     this.selectedSensorType = 'CARDIO_CUFF',
     this.currentTelemetry,
     this.historicalVitals = const [],
     this.simulatedAbnormalInjected = false,
+    this.autoReconnectEnabled = true,
+    this.backgroundTelemetryEnabled = false,
+    this.connectionStatus = 'CONNECTED',
+    this.reconnectAttempts = 0,
+    this.currentBackoffMs = 1000,
     this.errorMessage,
   });
 
   VitalsState copyWith({
     bool? isLoading,
     List<MedicalDeviceModel>? devices,
+    List<MedicalDeviceModel>? gattPeripherals,
+    bool? isScanningGatt,
+    List<String>? activeGattUuidFilters,
     String? selectedSensorType,
     VitalReadingModel? currentTelemetry,
     List<VitalReadingModel>? historicalVitals,
     bool? simulatedAbnormalInjected,
+    bool? autoReconnectEnabled,
+    bool? backgroundTelemetryEnabled,
+    String? connectionStatus,
+    int? reconnectAttempts,
+    int? currentBackoffMs,
     String? errorMessage,
   }) {
     return VitalsState(
       isLoading: isLoading ?? this.isLoading,
       devices: devices ?? this.devices,
+      gattPeripherals: gattPeripherals ?? this.gattPeripherals,
+      isScanningGatt: isScanningGatt ?? this.isScanningGatt,
+      activeGattUuidFilters:
+          activeGattUuidFilters ?? this.activeGattUuidFilters,
       selectedSensorType: selectedSensorType ?? this.selectedSensorType,
       currentTelemetry: currentTelemetry ?? this.currentTelemetry,
       historicalVitals: historicalVitals ?? this.historicalVitals,
       simulatedAbnormalInjected:
           simulatedAbnormalInjected ?? this.simulatedAbnormalInjected,
+      autoReconnectEnabled: autoReconnectEnabled ?? this.autoReconnectEnabled,
+      backgroundTelemetryEnabled:
+          backgroundTelemetryEnabled ?? this.backgroundTelemetryEnabled,
+      connectionStatus: connectionStatus ?? this.connectionStatus,
+      reconnectAttempts: reconnectAttempts ?? this.reconnectAttempts,
+      currentBackoffMs: currentBackoffMs ?? this.currentBackoffMs,
       errorMessage: errorMessage,
     );
   }
@@ -52,12 +91,14 @@ class VitalsState {
 class VitalsNotifier extends Notifier<VitalsState> {
   late final VitalsRepository _repository;
   StreamSubscription<VitalReadingModel>? _telemetrySub;
+  StreamSubscription<String>? _connectionStatusSub;
 
   @override
   VitalsState build() {
     _repository = sl<VitalsRepository>();
     ref.onDispose(() {
       _telemetrySub?.cancel();
+      _connectionStatusSub?.cancel();
     });
     // Start listening
     _initStream();
@@ -71,6 +112,11 @@ class VitalsNotifier extends Notifier<VitalsState> {
       if (state.simulatedAbnormalInjected) return;
       state = state.copyWith(currentTelemetry: reading);
     });
+
+    _connectionStatusSub?.cancel();
+    _connectionStatusSub = _repository.connectionStatusStream.listen((status) {
+      state = state.copyWith(connectionStatus: status);
+    });
   }
 
   Future<void> _loadData() async {
@@ -78,13 +124,24 @@ class VitalsNotifier extends Notifier<VitalsState> {
     try {
       final history = await _repository.getHistoricalVitals(limit: 30);
       final devices = await _repository.scanDevices();
+      final gattDevices = await _repository.scanGattPeripherals(
+        serviceUuids: state.activeGattUuidFilters,
+      );
+      final connState = await _repository.getConnectionState();
       final latest = history.isNotEmpty ? history.first : null;
 
       state = state.copyWith(
         isLoading: false,
         historicalVitals: history,
         devices: devices,
+        gattPeripherals: gattDevices,
         currentTelemetry: latest,
+        connectionStatus:
+            connState['connectionStatus'] as String? ?? 'CONNECTED',
+        autoReconnectEnabled:
+            connState['autoReconnectEnabled'] as bool? ?? true,
+        backgroundTelemetryEnabled:
+            connState['backgroundTelemetryEnabled'] as bool? ?? false,
       );
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
@@ -93,6 +150,58 @@ class VitalsNotifier extends Notifier<VitalsState> {
 
   Future<void> refresh() async {
     await _loadData();
+  }
+
+  /// Sprint 23: Direct BLE GATT Peripheral Discovery with Service UUID Filtering
+  Future<void> scanGattPeripherals() async {
+    state = state.copyWith(isScanningGatt: true);
+    try {
+      final gattDevices = await _repository.scanGattPeripherals(
+        serviceUuids: state.activeGattUuidFilters,
+      );
+      state = state.copyWith(
+        gattPeripherals: gattDevices,
+        isScanningGatt: false,
+      );
+    } catch (e) {
+      state = state.copyWith(isScanningGatt: false, errorMessage: e.toString());
+    }
+  }
+
+  /// Sprint 23: Toggle specific GATT Service UUID filters
+  Future<void> toggleGattUuidFilter(String uuid) async {
+    final updatedFilters = List<String>.from(state.activeGattUuidFilters);
+    if (updatedFilters.contains(uuid)) {
+      if (updatedFilters.length > 1) {
+        updatedFilters.remove(uuid);
+      }
+    } else {
+      updatedFilters.add(uuid);
+    }
+    state = state.copyWith(activeGattUuidFilters: updatedFilters);
+    await scanGattPeripherals();
+  }
+
+  /// Sprint 23: Toggle automatic reconnection with exponential backoff
+  Future<void> toggleAutoReconnect(bool enabled) async {
+    await _repository.setAutoReconnect(enabled: enabled);
+    state = state.copyWith(autoReconnectEnabled: enabled);
+  }
+
+  /// Sprint 23: Toggle background telemetry ingestion & Android foreground notification
+  Future<void> toggleBackgroundTelemetry(bool enabled) async {
+    await _repository.setBackgroundTelemetry(enabled: enabled);
+    state = state.copyWith(backgroundTelemetryEnabled: enabled);
+  }
+
+  /// Sprint 23: Simulate a connection drop to demonstrate exponential backoff recovery
+  Future<void> simulateConnectionDrop() async {
+    state = state.copyWith(
+      connectionStatus: 'RECONNECTING',
+      reconnectAttempts: 1,
+      currentBackoffMs: 1000,
+    );
+    await _repository.simulateConnectionDrop();
   }
 
   Future<void> selectDevice(String sensorType) async {
@@ -104,6 +213,8 @@ class VitalsNotifier extends Notifier<VitalsState> {
     state = state.copyWith(
       selectedSensorType: sensorType,
       devices: updatedDevices,
+      connectionStatus: 'CONNECTED',
+      reconnectAttempts: 0,
       simulatedAbnormalInjected: false,
     );
   }
@@ -113,7 +224,10 @@ class VitalsNotifier extends Notifier<VitalsState> {
     final updatedDevices = state.devices.map((d) {
       return d.copyWith(connected: false);
     }).toList();
-    state = state.copyWith(devices: updatedDevices);
+    state = state.copyWith(
+      devices: updatedDevices,
+      connectionStatus: 'DISCONNECTED',
+    );
   }
 
   Future<Map<String, dynamic>> calibrateCurrentDevice() async {

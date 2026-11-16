@@ -13,12 +13,34 @@ class NativeSensorBridge {
     'com.safeer.vitalis/clinical_telemetry',
   );
 
+  // Standard Bluetooth SIG Clinical Service UUIDs
+  static const String uuidHeartRate = '0x180D';
+  static const String uuidBloodPressure = '0x1810';
+  static const String uuidGlucose = '0x1808';
+
   String _currentSensorType = 'CARDIO_CUFF';
   bool _isPaired = true;
+  bool _autoReconnectEnabled = true;
+  bool _backgroundTelemetryEnabled = false;
+  String _connectionStatus = 'CONNECTED';
+  int _reconnectAttempts = 0;
+  int _currentBackoffMs = 1000;
+
   StreamController<Map<String, dynamic>>? _fallbackController;
+  final StreamController<String> _connectionStatusController =
+      StreamController<String>.broadcast();
   Timer? _fallbackTimer;
+  Timer? _reconnectTimer;
 
   bool get _isNativeMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  Stream<String> get connectionStatusStream =>
+      _connectionStatusController.stream;
+
+  String get currentConnectionStatus => _connectionStatus;
+  bool get isAutoReconnectEnabled => _autoReconnectEnabled;
+  bool get isBackgroundTelemetryEnabled => _backgroundTelemetryEnabled;
+  int get reconnectAttempts => _reconnectAttempts;
 
   Future<List<Map<String, dynamic>>> scanClinicalSensors() async {
     if (_isNativeMobile) {
@@ -68,9 +90,93 @@ class NativeSensorBridge {
     ];
   }
 
+  /// Sprint 23: Direct BLE GATT Peripheral Discovery with Service UUID Filtering
+  Future<List<Map<String, dynamic>>> scanGattPeripherals({
+    List<String>? serviceUuids,
+  }) async {
+    final activeFilters =
+        serviceUuids ?? [uuidHeartRate, uuidBloodPressure, uuidGlucose];
+
+    if (_isNativeMobile) {
+      try {
+        final List<dynamic>? result = await _methodChannel.invokeListMethod(
+          'scanGattPeripherals',
+          {'serviceUuids': activeFilters},
+        );
+        if (result != null) {
+          return result
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+        }
+      } catch (e) {
+        debugPrint('Native GATT scan error, using simulated fallback: $e');
+      }
+    }
+
+    // Deterministic simulation for tests & desktop with UUID filtering
+    final allGattPeripherals = [
+      {
+        'id': 'GATT-CC-8821',
+        'name': 'CardioCuff Pro BLE-GATT',
+        'model': 'CC-PRO-GATT-V3',
+        'type': 'CARDIO_CUFF',
+        'macAddress': 'C4:D3:58:AA:11:42',
+        'batteryLevel': 92,
+        'rssi': -52,
+        'serviceUuids': [uuidBloodPressure, uuidHeartRate],
+        'isGattDevice': true,
+        'connectionStatus': (_currentSensorType == 'CARDIO_CUFF' && _isPaired)
+            ? _connectionStatus
+            : 'DISCONNECTED',
+      },
+      {
+        'id': 'GATT-GS-4190',
+        'name': 'GlucoSense CGM Direct',
+        'model': 'GS-CGM-DIRECT-X',
+        'type': 'GLUCO_SENSE',
+        'macAddress': 'E1:8B:22:90:3F:8A',
+        'batteryLevel': 96,
+        'rssi': -46,
+        'serviceUuids': [uuidGlucose],
+        'isGattDevice': true,
+        'connectionStatus': (_currentSensorType == 'GLUCO_SENSE' && _isPaired)
+            ? _connectionStatus
+            : 'DISCONNECTED',
+      },
+      {
+        'id': 'GATT-OP-7734',
+        'name': 'OxyPulse Clinical Wireless',
+        'model': 'OP-CLIN-GATT-2',
+        'type': 'OXY_PULSE',
+        'macAddress': 'F0:24:6D:77:C8:19',
+        'batteryLevel': 81,
+        'rssi': -59,
+        'serviceUuids': [uuidHeartRate],
+        'isGattDevice': true,
+        'connectionStatus': (_currentSensorType == 'OXY_PULSE' && _isPaired)
+            ? _connectionStatus
+            : 'DISCONNECTED',
+      },
+    ];
+
+    final uppercaseFilters = activeFilters.map((u) => u.toUpperCase()).toSet();
+    return allGattPeripherals.where((device) {
+      final services =
+          (device['serviceUuids'] as List<String>?)?.map(
+            (s) => s.toUpperCase(),
+          ) ??
+          [];
+      return services.any(uppercaseFilters.contains);
+    }).toList();
+  }
+
   Future<bool> pairMedicalDevice(String sensorType) async {
     _currentSensorType = sensorType;
     _isPaired = true;
+    _setConnectionStatus('CONNECTED');
+    _reconnectAttempts = 0;
+    _currentBackoffMs = 1000;
+
     if (_isNativeMobile) {
       try {
         final bool? success = await _methodChannel.invokeMethod<bool>(
@@ -87,6 +193,9 @@ class NativeSensorBridge {
 
   Future<bool> disconnectDevice() async {
     _isPaired = false;
+    _setConnectionStatus('DISCONNECTED');
+    _reconnectTimer?.cancel();
+
     if (_isNativeMobile) {
       try {
         final bool? success = await _methodChannel.invokeMethod<bool>(
@@ -123,6 +232,110 @@ class NativeSensorBridge {
     };
   }
 
+  /// Sprint 23: Toggle automatic reconnection with exponential backoff
+  Future<bool> enableAutoReconnect({required bool enabled}) async {
+    _autoReconnectEnabled = enabled;
+    if (_isNativeMobile) {
+      try {
+        final bool? res = await _methodChannel.invokeMethod<bool>(
+          'enableAutoReconnect',
+          {'enabled': enabled},
+        );
+        return res ?? true;
+      } catch (e) {
+        debugPrint('Native enableAutoReconnect error: $e');
+      }
+    }
+    return true;
+  }
+
+  /// Sprint 23: Toggle background telemetry ingestion & Android foreground notification
+  Future<bool> toggleBackgroundTelemetry({required bool enabled}) async {
+    _backgroundTelemetryEnabled = enabled;
+    if (_isNativeMobile) {
+      try {
+        final bool? res = await _methodChannel.invokeMethod<bool>(
+          'toggleBackgroundTelemetry',
+          {'enabled': enabled},
+        );
+        return res ?? true;
+      } catch (e) {
+        debugPrint('Native toggleBackgroundTelemetry error: $e');
+      }
+    }
+    return true;
+  }
+
+  /// Sprint 23: Retrieve native connection state and backoff metrics
+  Future<Map<String, dynamic>> getConnectionState() async {
+    if (_isNativeMobile) {
+      try {
+        final Map<dynamic, dynamic>? res = await _methodChannel.invokeMapMethod(
+          'getConnectionState',
+        );
+        if (res != null) {
+          return Map<String, dynamic>.from(res);
+        }
+      } catch (e) {
+        debugPrint('Native getConnectionState error: $e');
+      }
+    }
+
+    return {
+      'connectionStatus': _connectionStatus,
+      'autoReconnectEnabled': _autoReconnectEnabled,
+      'backgroundTelemetryEnabled': _backgroundTelemetryEnabled,
+      'reconnectAttempt': _reconnectAttempts,
+      'maxReconnectAttempts': 5,
+      'currentBackoffMs': _currentBackoffMs,
+    };
+  }
+
+  /// Sprint 23: Simulate a connection drop to trigger and verify exponential backoff
+  Future<void> simulateConnectionDrop() async {
+    if (!_isPaired || !_autoReconnectEnabled) return;
+
+    _setConnectionStatus('RECONNECTING');
+    _reconnectAttempts = 1;
+    _currentBackoffMs = 1000;
+
+    if (_isNativeMobile) {
+      try {
+        await _methodChannel.invokeMethod('simulateConnectionDrop');
+        return;
+      } catch (e) {
+        debugPrint('Native simulateConnectionDrop error: $e');
+      }
+    }
+
+    _scheduleSimulatedBackoff();
+  }
+
+  void _scheduleSimulatedBackoff() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(milliseconds: _currentBackoffMs), () {
+      if (!_autoReconnectEnabled) return;
+
+      if (_reconnectAttempts >= 3) {
+        // Reconnection succeeded
+        _setConnectionStatus('CONNECTED');
+        _reconnectAttempts = 0;
+        _currentBackoffMs = 1000;
+      } else {
+        _reconnectAttempts++;
+        _currentBackoffMs = (_currentBackoffMs * 2).clamp(1000, 16000);
+        _scheduleSimulatedBackoff();
+      }
+    });
+  }
+
+  void _setConnectionStatus(String status) {
+    _connectionStatus = status;
+    if (!_connectionStatusController.isClosed) {
+      _connectionStatusController.add(status);
+    }
+  }
+
   Stream<Map<String, dynamic>> get clinicalTelemetryStream {
     if (_isNativeMobile) {
       try {
@@ -140,6 +353,7 @@ class NativeSensorBridge {
 
     _fallbackTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!_isPaired ||
+          _connectionStatus != 'CONNECTED' ||
           _fallbackController == null ||
           _fallbackController!.isClosed) {
         return;
@@ -171,6 +385,8 @@ class NativeSensorBridge {
           'irregularHeartbeat': rand.nextInt(100) < 5,
           'batteryLevel': 88,
           'signalQuality': 'OPTIMAL',
+          'connectionStatus': _connectionStatus,
+          'autoReconnectActive': _autoReconnectEnabled,
         };
       case 'GLUCO_SENSE':
         final glucoseMgDl = 108 + rand.nextInt(15) - 7;
@@ -187,6 +403,8 @@ class NativeSensorBridge {
           'timeInRangePercentage': 94.6,
           'sensorLifetimeDaysLeft': 11,
           'signalQuality': 'EXCELLENT',
+          'connectionStatus': _connectionStatus,
+          'autoReconnectActive': _autoReconnectEnabled,
         };
       case 'OXY_PULSE':
         final spO2 = 98 + rand.nextInt(3) - 1;
@@ -203,6 +421,8 @@ class NativeSensorBridge {
           'temperatureFahrenheit': tempF,
           'crc32Checksum': '8F3A2B1C',
           'signalQuality': 'NOMINAL',
+          'connectionStatus': _connectionStatus,
+          'autoReconnectActive': _autoReconnectEnabled,
         };
       default:
         return {'timestamp': now, 'sensorType': 'UNKNOWN'};
@@ -211,6 +431,8 @@ class NativeSensorBridge {
 
   void dispose() {
     _fallbackTimer?.cancel();
+    _reconnectTimer?.cancel();
     _fallbackController?.close();
+    _connectionStatusController.close();
   }
 }

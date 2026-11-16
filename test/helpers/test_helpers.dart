@@ -56,6 +56,104 @@ class FakeVitalsRepository implements VitalsRepository {
   }
 
   @override
+  Future<List<MedicalDeviceModel>> scanGattPeripherals({
+    List<String>? serviceUuids,
+  }) async {
+    final activeFilters = (serviceUuids ?? ['0x180D', '0x1810', '0x1808'])
+        .map((s) => s.toUpperCase())
+        .toSet();
+
+    final allGatt = [
+      const MedicalDeviceModel(
+        id: 'GATT-CC-8821',
+        name: 'CardioCuff Pro BLE-GATT',
+        model: 'CC-PRO-GATT-V3',
+        type: 'CARDIO_CUFF',
+        batteryLevel: 92,
+        rssi: -52,
+        connected: true,
+        macAddress: 'C4:D3:58:AA:11:42',
+        serviceUuids: ['0x1810', '0x180D'],
+        isGattDevice: true,
+        connectionStatus: 'CONNECTED',
+      ),
+      const MedicalDeviceModel(
+        id: 'GATT-GS-4190',
+        name: 'GlucoSense CGM Direct',
+        model: 'GS-CGM-DIRECT-X',
+        type: 'GLUCO_SENSE',
+        batteryLevel: 96,
+        rssi: -46,
+        connected: false,
+        macAddress: 'E1:8B:22:90:3F:8A',
+        serviceUuids: ['0x1808'],
+        isGattDevice: true,
+        connectionStatus: 'DISCONNECTED',
+      ),
+      const MedicalDeviceModel(
+        id: 'GATT-OP-7734',
+        name: 'OxyPulse Clinical Wireless',
+        model: 'OP-CLIN-GATT-2',
+        type: 'OXY_PULSE',
+        batteryLevel: 81,
+        rssi: -59,
+        connected: false,
+        macAddress: 'F0:24:6D:77:C8:19',
+        serviceUuids: ['0x180D'],
+        isGattDevice: true,
+        connectionStatus: 'DISCONNECTED',
+      ),
+    ];
+
+    return allGatt.where((device) {
+      final u = device.serviceUuids.map((s) => s.toUpperCase()).toSet();
+      return u.intersection(activeFilters).isNotEmpty;
+    }).toList();
+  }
+
+  bool autoReconnectActive = true;
+  bool backgroundTelemetryActive = false;
+  String currentStatus = 'CONNECTED';
+  final StreamController<String> _statusController =
+      StreamController<String>.broadcast();
+
+  @override
+  Future<bool> setAutoReconnect({required bool enabled}) async {
+    autoReconnectActive = enabled;
+    return true;
+  }
+
+  @override
+  Future<bool> setBackgroundTelemetry({required bool enabled}) async {
+    backgroundTelemetryActive = enabled;
+    return true;
+  }
+
+  @override
+  Future<Map<String, dynamic>> getConnectionState() async {
+    return {
+      'connectionStatus': currentStatus,
+      'autoReconnectEnabled': autoReconnectActive,
+      'backgroundTelemetryEnabled': backgroundTelemetryActive,
+      'reconnectAttempt': 0,
+      'maxReconnectAttempts': 5,
+      'currentBackoffMs': 1000,
+    };
+  }
+
+  @override
+  Future<void> simulateConnectionDrop() async {
+    currentStatus = 'RECONNECTING';
+    _statusController.add('RECONNECTING');
+    await Future.delayed(const Duration(milliseconds: 50));
+    currentStatus = 'CONNECTED';
+    _statusController.add('CONNECTED');
+  }
+
+  @override
+  Stream<String> get connectionStatusStream => _statusController.stream;
+
+  @override
   Future<bool> pairDevice(String sensorType) async => true;
 
   @override

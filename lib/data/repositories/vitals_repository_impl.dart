@@ -41,6 +41,14 @@ class VitalsRepositoryImpl implements VitalsRepository {
   }
 
   @override
+  Future<List<MedicalDeviceModel>> scanGattPeripherals({
+    List<String>? serviceUuids,
+  }) async {
+    final list = await _bridge.scanGattPeripherals(serviceUuids: serviceUuids);
+    return list.map((m) => MedicalDeviceModel.fromMap(m)).toList();
+  }
+
+  @override
   Future<bool> pairDevice(String sensorType) async {
     return await _bridge.pairMedicalDevice(sensorType);
   }
@@ -56,9 +64,32 @@ class VitalsRepositoryImpl implements VitalsRepository {
   }
 
   @override
+  Future<bool> setAutoReconnect({required bool enabled}) async {
+    return await _bridge.enableAutoReconnect(enabled: enabled);
+  }
+
+  @override
+  Future<bool> setBackgroundTelemetry({required bool enabled}) async {
+    return await _bridge.toggleBackgroundTelemetry(enabled: enabled);
+  }
+
+  @override
+  Future<Map<String, dynamic>> getConnectionState() async {
+    return await _bridge.getConnectionState();
+  }
+
+  @override
+  Future<void> simulateConnectionDrop() async {
+    await _bridge.simulateConnectionDrop();
+  }
+
+  @override
   Stream<VitalReadingModel> get liveTelemetryStream {
     return _bridge.clinicalTelemetryStream.map(
       (packet) => VitalReadingModel.fromTelemetryPacket(packet),
     );
   }
+
+  @override
+  Stream<String> get connectionStatusStream => _bridge.connectionStatusStream;
 }

@@ -66,6 +66,7 @@ class VitalsView extends ConsumerWidget {
         LiveTelemetryCard(
           reading: state.currentTelemetry,
           selectedSensorType: state.selectedSensorType,
+          connectionStatus: state.connectionStatus,
           onOpenPairingSheet: () => _openPairingSheet(context),
         ),
         const SizedBox(height: 12),
@@ -96,6 +97,7 @@ class VitalsView extends ConsumerWidget {
                 LiveTelemetryCard(
                   reading: state.currentTelemetry,
                   selectedSensorType: state.selectedSensorType,
+                  connectionStatus: state.connectionStatus,
                   onOpenPairingSheet: () => _openPairingSheet(context),
                 ),
                 const SizedBox(height: 12),

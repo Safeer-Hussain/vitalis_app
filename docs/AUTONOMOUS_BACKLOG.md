@@ -227,7 +227,7 @@ This autonomous roadmap provides daily engineering sprints for continuous iterat
 ---
 
 ### Sprint 23: Bluetooth Low Energy (BLE) GATT Direct Peripheral Integration
-- Status: SCHEDULED
+- Status: COMPLETED
 - Scope: Expand native Android and iOS sensor bridges to support direct physical BLE GATT peripheral scanning via native CoreBluetooth and Android BluetoothLeScanner.
 - Acceptance Criteria:
   1. Native peripheral discovery with service UUID filtering (`0x180D` Heart Rate, `0x1810` Blood Pressure, `0x1808` Glucose).

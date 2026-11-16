@@ -5,12 +5,14 @@ import '../../../data/models/vital_reading_model.dart';
 class LiveTelemetryCard extends StatelessWidget {
   final VitalReadingModel? reading;
   final String selectedSensorType;
+  final String connectionStatus;
   final VoidCallback onOpenPairingSheet;
 
   const LiveTelemetryCard({
     super.key,
     required this.reading,
     required this.selectedSensorType,
+    this.connectionStatus = 'CONNECTED',
     required this.onOpenPairingSheet,
   });
 
@@ -77,13 +79,21 @@ class LiveTelemetryCard extends StatelessWidget {
                             height: 8,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: colorScheme.primary,
+                              color: connectionStatus == 'CONNECTED'
+                                  ? colorScheme.primary
+                                  : (connectionStatus == 'RECONNECTING'
+                                        ? colorScheme.error
+                                        : colorScheme.outline),
                             ),
                           ),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              'Live Native Telemetry (2s interval)',
+                              connectionStatus == 'CONNECTED'
+                                  ? 'Live Native Telemetry (2s interval)'
+                                  : (connectionStatus == 'RECONNECTING'
+                                        ? 'Reconnecting (Backoff Active)...'
+                                        : 'Sensor Disconnected'),
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 11,
@@ -111,6 +121,43 @@ class LiveTelemetryCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
+            if (connectionStatus == 'RECONNECTING') ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: colorScheme.primary),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Reconnecting: Exponential backoff recovery in progress...',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (isAbnormal) ...[
               Container(
                 margin: const EdgeInsets.only(bottom: 14),
