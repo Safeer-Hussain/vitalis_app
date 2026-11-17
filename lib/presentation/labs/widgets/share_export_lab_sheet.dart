@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/utils/app_feedback.dart';
 import '../../../data/models/lab_report_model.dart';
+import '../../fhir/widgets/fhir_export_modal.dart';
 import '../labs_notifier.dart';
 
 class ShareExportLabSheet extends ConsumerWidget {
@@ -94,6 +95,20 @@ class ShareExportLabSheet extends ConsumerWidget {
               },
               icon: const Icon(Icons.send_rounded),
               label: const Text('Share Directly with Specialist'),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => const FhirExportModal(),
+                );
+              },
+              icon: const Icon(Icons.sync_alt_rounded),
+              label: const Text('Open Full FHIR R4 Bundle Gateway'),
             ),
             const SizedBox(height: 10),
             OutlinedButton.icon(

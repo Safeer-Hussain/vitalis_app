@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/theme_mode_provider.dart';
 import '../../core/utils/app_feedback.dart';
+import '../fhir/widgets/fhir_export_modal.dart';
 import 'emergency_ice_modal.dart';
 import 'recruiter_debug_drawer.dart';
 
@@ -109,6 +110,38 @@ class SettingsView extends ConsumerWidget {
                         ),
                       ),
                       builder: (_) => const EmergencyIceModal(),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              Card(
+                child: ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      Icons.sync_alt_rounded,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  title: const Text(
+                    'FHIR R4 Clinical Interoperability Hub',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Export cryptographically sealed HL7 FHIR bundles (LOINC & RxNorm)',
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      backgroundColor: Colors.transparent,
+                      builder: (_) => const FhirExportModal(),
                     );
                   },
                 ),

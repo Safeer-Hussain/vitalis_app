@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vitalis_app/core/di/injection_container.dart';
+import 'package:vitalis_app/core/fhir/fhir_r4_service.dart';
 import 'package:vitalis_app/data/models/ai_triage_model.dart';
 import 'package:vitalis_app/data/models/biomarker_model.dart';
+import 'package:vitalis_app/data/models/fhir_bundle_model.dart';
 import 'package:vitalis_app/data/models/lab_report_model.dart';
 import 'package:vitalis_app/data/models/medical_device_model.dart';
 import 'package:vitalis_app/data/models/prescription_model.dart';
@@ -11,6 +13,7 @@ import 'package:vitalis_app/data/models/telehealth_appointment_model.dart';
 import 'package:vitalis_app/data/models/telehealth_doctor_model.dart';
 import 'package:vitalis_app/data/models/vital_reading_model.dart';
 import 'package:vitalis_app/domain/repositories/ai_triage_repository.dart';
+import 'package:vitalis_app/domain/repositories/fhir_repository.dart';
 import 'package:vitalis_app/domain/repositories/lab_repository.dart';
 import 'package:vitalis_app/domain/repositories/prescription_repository.dart';
 import 'package:vitalis_app/domain/repositories/telehealth_repository.dart';
@@ -347,12 +350,108 @@ class FakeAiTriageRepository implements AiTriageRepository {
   }
 }
 
+class FakeFhirRepository implements FhirRepository {
+  final FhirR4Service _service = FhirR4Service();
+
+  @override
+  Future<FhirBundleModel> exportPatientFhirBundle() async {
+    return _service.exportBundle(
+      vitals: [
+        VitalReadingModel(
+          id: 'v_test_01',
+          timestamp: DateTime.now(),
+          sensorType: 'CARDIO_CUFF',
+          systolic: 120,
+          diastolic: 80,
+          pulseRate: 72,
+        ),
+      ],
+      labs: [
+        LabReportModel(
+          id: 'l_test_01',
+          title: 'Complete Blood Count',
+          panelCode: '58410-2',
+          category: 'Hematology',
+          collectionDate: DateTime.now(),
+          orderingPhysician: 'Dr. Sarah Chen',
+          status: 'FINAL',
+          clinicalNotes: 'Normal CBC range',
+          isBookmarked: false,
+          biomarkers: const [
+            BiomarkerModel(
+              id: 'bm_01',
+              reportId: 'l_test_01',
+              name: 'WBC',
+              code: '6690-2',
+              value: 6.5,
+              unit: '10*3/uL',
+              minRange: 4.5,
+              maxRange: 11.0,
+              clinicalStatus: 'OPTIMAL',
+            ),
+          ],
+        ),
+      ],
+      prescriptions: [
+        const PrescriptionModel(
+          id: 'rx_test_01',
+          medicationName: 'Lisinopril',
+          dosage: '10mg',
+          instructions: 'Take 1 daily',
+          frequency: 'Morning',
+          pillsRemaining: 28,
+          totalPills: 30,
+          dosesTakenToday: 1,
+          dailyTargetDoses: 1,
+          prescribingDoctor: 'Dr. Chen',
+          refillStatus: 'NORMAL',
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<List<FhirResourceModel>> exportObservations() async {
+    final bundle = await exportPatientFhirBundle();
+    return bundle.entries
+        .where((e) => e.resourceType == 'Observation')
+        .toList();
+  }
+
+  @override
+  Future<List<FhirResourceModel>> exportDiagnosticReports() async {
+    final bundle = await exportPatientFhirBundle();
+    return bundle.entries
+        .where((e) => e.resourceType == 'DiagnosticReport')
+        .toList();
+  }
+
+  @override
+  Future<List<FhirResourceModel>> exportMedicationStatements() async {
+    final bundle = await exportPatientFhirBundle();
+    return bundle.entries
+        .where((e) => e.resourceType == 'MedicationStatement')
+        .toList();
+  }
+
+  @override
+  FhirValidationReport validateBundle(FhirBundleModel bundle) {
+    return _service.validateBundle(bundle);
+  }
+
+  @override
+  bool verifyCryptographicSignature(FhirBundleModel bundle) {
+    return _service.verifyBundleSignature(bundle);
+  }
+}
+
 void registerTestDependencies({
   FakeVitalsRepository? vitals,
   FakeTelehealthRepository? telehealth,
   FakeLabRepository? labs,
   FakePrescriptionRepository? prescriptions,
   FakeAiTriageRepository? triage,
+  FakeFhirRepository? fhir,
 }) {
   SharedPreferences.setMockInitialValues({});
   if (sl.isRegistered<VitalsRepository>()) {
@@ -370,6 +469,9 @@ void registerTestDependencies({
   if (sl.isRegistered<AiTriageRepository>()) {
     sl.unregister<AiTriageRepository>();
   }
+  if (sl.isRegistered<FhirRepository>()) {
+    sl.unregister<FhirRepository>();
+  }
 
   sl.registerSingleton<VitalsRepository>(vitals ?? FakeVitalsRepository());
   sl.registerSingleton<TelehealthRepository>(
@@ -380,4 +482,5 @@ void registerTestDependencies({
     prescriptions ?? FakePrescriptionRepository(),
   );
   sl.registerSingleton<AiTriageRepository>(triage ?? FakeAiTriageRepository());
+  sl.registerSingleton<FhirRepository>(fhir ?? FakeFhirRepository());
 }
