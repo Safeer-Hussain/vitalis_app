@@ -40,7 +40,7 @@ jobs:
           flutter test
 
       - name: Build Android Release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --pub --android-skip-build-dependency-validation
 
       - name: Create GitHub Release and Attach APK
         uses: softprops/action-gh-release@v2
