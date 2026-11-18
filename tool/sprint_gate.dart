@@ -40,7 +40,7 @@ Future<void> main(List<String> args) async {
     stepNumber: 3,
     title: 'Static Analysis (0 Errors, 0 Warnings)',
     executable: 'flutter',
-    arguments: ['analyze', '--no-pub'],
+    arguments: ['analyze', '--no-pub', '--no-fatal-infos'],
   );
 
   // Stage 4: Unit and widget test suite

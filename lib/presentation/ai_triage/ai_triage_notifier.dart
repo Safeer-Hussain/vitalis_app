@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/di/injection_container.dart';
+import '../../core/slm/clinical_safety_classifier.dart';
+import '../../core/slm/gemma_clinical_slm_engine.dart';
 import '../../data/models/ai_triage_model.dart';
 import '../../domain/repositories/ai_triage_repository.dart';
 import '../../domain/repositories/lab_repository.dart';
@@ -15,6 +17,8 @@ class AiTriageState {
   final bool isCorrelating;
   final bool isStreaming;
   final List<AiTriageMessageModel> messages;
+  final GemmaSlmMetrics slmMetrics;
+  final ClinicalSafetyResult? lastSafetyResult;
   final String? errorMessage;
 
   const AiTriageState({
@@ -22,6 +26,8 @@ class AiTriageState {
     this.isCorrelating = false,
     this.isStreaming = false,
     this.messages = const [],
+    this.slmMetrics = const GemmaSlmMetrics(),
+    this.lastSafetyResult,
     this.errorMessage,
   });
 
@@ -30,6 +36,8 @@ class AiTriageState {
     bool? isCorrelating,
     bool? isStreaming,
     List<AiTriageMessageModel>? messages,
+    GemmaSlmMetrics? slmMetrics,
+    ClinicalSafetyResult? lastSafetyResult,
     String? errorMessage,
   }) {
     return AiTriageState(
@@ -37,6 +45,8 @@ class AiTriageState {
       isCorrelating: isCorrelating ?? this.isCorrelating,
       isStreaming: isStreaming ?? this.isStreaming,
       messages: messages ?? this.messages,
+      slmMetrics: slmMetrics ?? this.slmMetrics,
+      lastSafetyResult: lastSafetyResult ?? this.lastSafetyResult,
       errorMessage: errorMessage,
     );
   }
@@ -62,14 +72,28 @@ class AiTriageNotifier extends Notifier<AiTriageState> {
     state = state.copyWith(isLoading: true);
     try {
       final history = await _triageRepo.getChatHistory();
-      state = state.copyWith(isLoading: false, messages: history);
+      final metrics = _triageRepo.getSlmMetrics();
+      state = state.copyWith(
+        isLoading: false,
+        messages: history,
+        slmMetrics: metrics,
+      );
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
     }
   }
 
+  Future<void> setSlmDelegate(String delegate) async {
+    await _triageRepo.setSlmExecutionDelegate(delegate);
+    state = state.copyWith(slmMetrics: _triageRepo.getSlmMetrics());
+  }
+
   Future<void> sendPrompt(String text) async {
     if (text.trim().isEmpty || state.isStreaming) return;
+
+    // Safety Classifier Pre-Screening
+    final safety = _triageRepo.evaluateInputSafety(text);
+    state = state.copyWith(lastSafetyResult: safety);
 
     const uuid = Uuid();
     final userMsg = AiTriageMessageModel(
@@ -133,7 +157,9 @@ class AiTriageNotifier extends Notifier<AiTriageState> {
       // Finalize and save
       final finalizedMsg = streamingAiMsg.copyWith(
         isStreaming: false,
-        clinicalSummary: 'Triage assessment complete',
+        clinicalSummary: safety.isGated
+            ? 'Safety Classifier Gated - Emergency Action Triggered'
+            : 'Gemma 2B SLM Local Triage Complete',
       );
       await _triageRepo.saveMessage(finalizedMsg);
 

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vitalis_app/core/di/injection_container.dart';
 import 'package:vitalis_app/core/fhir/fhir_r4_service.dart';
+import 'package:vitalis_app/core/slm/clinical_safety_classifier.dart';
+import 'package:vitalis_app/core/slm/gemma_clinical_slm_engine.dart';
 import 'package:vitalis_app/data/models/ai_triage_model.dart';
 import 'package:vitalis_app/data/models/biomarker_model.dart';
 import 'package:vitalis_app/data/models/fhir_bundle_model.dart';
@@ -322,6 +324,8 @@ class FakePrescriptionRepository implements PrescriptionRepository {
 
 class FakeAiTriageRepository implements AiTriageRepository {
   final List<AiTriageMessageModel> history = [];
+  GemmaSlmMetrics _metrics = const GemmaSlmMetrics();
+  final ClinicalSafetyClassifier _classifier = ClinicalSafetyClassifier();
 
   @override
   Future<List<AiTriageMessageModel>> getChatHistory() async =>
@@ -335,6 +339,19 @@ class FakeAiTriageRepository implements AiTriageRepository {
   @override
   Future<void> clearHistory() async {
     history.clear();
+  }
+
+  @override
+  GemmaSlmMetrics getSlmMetrics() => _metrics;
+
+  @override
+  Future<void> setSlmExecutionDelegate(String delegate) async {
+    _metrics = _metrics.copyWith(activeDelegate: delegate);
+  }
+
+  @override
+  ClinicalSafetyResult evaluateInputSafety(String prompt) {
+    return _classifier.evaluateInput(prompt);
   }
 
   @override
